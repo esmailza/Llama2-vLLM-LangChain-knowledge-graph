@@ -9,3 +9,7 @@ The repository is organized into two distinct phases. In the initial phase, we i
 Following the extraction of binary entity classes, we create two bipartite graphs, one for the generated summary and another for the original summary. These graphs incorporate two types of nodes: entity classes and sentence numbers. Nodes are connected when the associated sentence contains the corresponding entity class. Each trial record results in two graphs, one representing the original summary and the other the BART-generated summary. The degree of similarity between these graphs indicates how effectively entity classes and their sentence structures are preserved within the summaries. We use Jaccard similarity to compare graphs.
 ![](data/img/predicted_graph.png)
  
+## References
+
+-  Efficient Memory Management for Large Language Model Serving with PagedAttention [Link](https://github.com/vllm-project/vllm)
+- LangChain + vLLM [Link](https://python.langchain.com/docs/integrations/llms/vllm)
