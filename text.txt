@@ -1,136 +1,54 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import torchvision.transforms as transforms
-from torchvision.datasets import MNIST
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import numpy as np
+from torchvision.datasets import CIFAR10
+from torch.utils.data import DataLoader, Dataset
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ConvBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.relu(self.bn2(self.conv2(x)))
-        return x
-
-class EncoderBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(EncoderBlock, self).__init__()
-        self.conv = ConvBlock(in_channels, out_channels)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-
-    def forward(self, x):
-        x = self.conv(x)
-        p = self.pool(x)
-        return x, p
-
-class DecoderBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(DecoderBlock, self).__init__()
-        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
-        self.conv = ConvBlock(out_channels*2, out_channels)
-
-    def forward(self, x, skip):
-        x = self.up(x)
-        diffY = skip.size()[2] - x.size()[2]
-        diffX = skip.size()[3] - x.size()[3]
-        x = nn.functional.pad(x, [diffX // 2, diffX - diffX // 2,
-                                  diffY // 2, diffY - diffY // 2])
-        x = torch.cat([x, skip], dim=1)
-        x = self.conv(x)
-        return x
-
-class UNet(nn.Module):
-    def __init__(self):
-        super(UNet, self).__init__()
-        self.e1 = EncoderBlock(1, 64)
-        self.e2 = EncoderBlock(64, 128)
-        self.e3 = EncoderBlock(128, 256)
-        self.e4 = EncoderBlock(256, 512)
-        self.b = ConvBlock(512, 1024)
-        self.d1 = DecoderBlock(1024, 512)
-        self.d2 = DecoderBlock(512, 256)
-        self.d3 = DecoderBlock(256, 128)
-        self.d4 = DecoderBlock(128, 64)
-        self.outputs = nn.Conv2d(64, 10, kernel_size=1)
-
-    def forward(self, x):
-        s1, p1 = self.e1(x)
-        s2, p2 = self.e2(p1)
-        s3, p3 = self.e3(p2)
-        s4, p4 = self.e4(p3)
-        b = self.b(p4)
-        d1 = self.d1(b, s4)
-        d2 = self.d2(d1, s3)
-        d3 = self.d3(d2, s2)
-        d4 = self.d4(d3, s1)
-        outputs = self.outputs(d4)
-        return outputs
-
-class SegmentationMNIST(MNIST):
-    def __getitem__(self, index):
-        img, target = super(SegmentationMNIST, self).__getitem__(index)
-        img = img.numpy()[0]
-        target = np.array(target, dtype=np.uint8)
-        mask = np.zeros_like(img, dtype=np.uint8)
-        mask[img > 0] = target
-        img = torch.from_numpy(img).unsqueeze(0).float()
-        mask = torch.from_numpy(mask).long()
-        return img, mask
-
+# Define the transformation to resize the image to 192x192
 transform = transforms.Compose([
-    transforms.Resize((572, 572)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
+    transforms.Resize((192, 192)),
+    transforms.ToTensor()
 ])
 
-train_dataset = SegmentationMNIST(root='./data', train=True, download=True, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+# Load the CIFAR-10 dataset
+train_dataset = CIFAR10(root='./data', train=True, download=True, transform=transform)
 
-test_dataset = SegmentationMNIST(root='./data', train=False, download=True, transform=transform)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+def create_label_tensor(labels, img_size=(192, 192)):
+    batch_size = len(labels)
+    new_shape = (batch_size, 6, img_size[0], img_size[1])  # Shape: [batch_size, 6, 192, 192]
+    new_labels = torch.zeros(new_shape, dtype=torch.long)
 
-def train_model(model, train_loader, criterion, optimizer, num_epochs=5):
-    for epoch in range(num_epochs):
-        model.train()
-        running_loss = 0.0
-        for inputs, labels in tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', unit='batch'):
-            inputs, labels = inputs.cuda(), labels.cuda()
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item() * inputs.size(0)
-        
-        epoch_loss = running_loss / len(train_loader.dataset)
-        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}')
+    for i in range(batch_size):
+        label = labels[i]
+        mask = torch.full((6, img_size[0], img_size[1]), label, dtype=torch.long)
+        new_labels[i] = mask
 
-def evaluate_model(model, test_loader, criterion):
-    model.eval()
-    running_loss = 0.0
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            inputs, labels = inputs.cuda(), labels.cuda()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            running_loss += loss.item() * inputs.size(0)
-    
-    epoch_loss = running_loss / len(test_loader.dataset)
-    print(f'Test Loss: {epoch_loss:.4f}')
+    return new_labels
 
-model = UNet().cuda()
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-4)
+# Transform all labels in the train_dataset
+all_labels = torch.tensor(train_dataset.targets)
+transformed_labels = create_label_tensor(all_labels)
 
-num_epochs = 10
-train_model(model, train_loader, criterion, optimizer, num_epochs)
-evaluate_model(model, test_loader, criterion)
+class CustomCIFAR10(Dataset):
+    def __init__(self, original_dataset, transformed_labels):
+        self.dataset = original_dataset
+        self.transformed_labels = transformed_labels
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        image, _ = self.dataset[idx]
+        label = self.transformed_labels[idx]
+        return image, label
+
+# Create a custom dataset with transformed labels
+custom_train_dataset = CustomCIFAR10(train_dataset, transformed_labels)
+
+# Use the custom dataset with DataLoader
+train_loader = DataLoader(custom_train_dataset, batch_size=32, shuffle=True)
+
+# Get a batch of training data
+images, labels = next(iter(train_loader))
+
+print("Resized image shape:", images.shape)  # Output: torch.Size([32, 3, 192, 192])
+print("Transformed label shape:", labels.shape)  # Output: torch.Size([32, 6, 192, 192])
